@@ -125,7 +125,7 @@ class OpenTSLMFlamingo(TimeSeriesLLM):
                 )
 
         model = TimeSeriesFlamingoWithTrainableEncoder(
-            SimpleNamespace(visual=time_series_encoder),
+            time_series_encoder,
             lang_encoder,
             text_tokenizer.encode("<|endofchunk|>")[-1],
             text_tokenizer.encode("<image>")[-1],
@@ -133,6 +133,9 @@ class OpenTSLMFlamingo(TimeSeriesLLM):
             cross_attn_every_n_layers=cross_attn_every_n_layers,
             **flamingo_kwargs,
         )
+
+        # Cast all components to match LLM dtype (bfloat16)
+        model.to(dtype=lang_encoder.dtype)
 
         # Freeze all parameters
         model.requires_grad_(False)

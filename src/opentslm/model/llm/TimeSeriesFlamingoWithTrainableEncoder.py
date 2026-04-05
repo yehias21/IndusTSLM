@@ -32,15 +32,18 @@ class TimeSeriesFlamingoWithTrainableEncoder(Flamingo):
             
             # Flatten batch, time and frame dimensions
             vision_x = rearrange(vision_x, "b T F c -> (b T F) c")
-            
+
+            # Cast input to match encoder dtype
+            vision_x = vision_x.to(dtype=next(self.vision_encoder.parameters()).dtype)
+
             # Process through encoder - will return [batch, patches, features]
-                
+
             vision_x = self.vision_encoder(vision_x)  # Shape: [(b*T*F), patches, features]
                 
             # Reshape to expected format for perceiver
             # The transformer output already has the "tokens" dimension we need (patches)
             vision_x = rearrange(vision_x, "(b T F) p d -> b T F p d", b=b, T=T, F=F)
-            
+
             # Process through perceiver
             vision_x = self.perceiver(vision_x)
             

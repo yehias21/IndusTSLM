@@ -15,6 +15,11 @@ from opentslm.time_series_datasets.m4.M4QADataset import M4QADataset
 from opentslm.time_series_datasets.sleep.SleepEDFCoTQADataset import SleepEDFCoTQADataset
 from opentslm.time_series_datasets.har_cot.HARCoTQADataset import HARCoTQADataset
 from opentslm.time_series_datasets.ecg_qa.ECGQACoTQADataset import ECGQACoTQADataset
+from opentslm.time_series_datasets.drilling.DrillingMCQDataset import DrillingMCQDataset
+from opentslm.time_series_datasets.drilling.DrillingCaptionDataset import DrillingCaptionDataset
+from opentslm.time_series_datasets.drilling.DrillingCoTDataset import DrillingCoTDataset
+from opentslm.time_series_datasets.drilling.DrillingCodeCoTDataset import DrillingCodeCoTDataset
+from opentslm.time_series_datasets.drilling.DrillingFullCoTDataset import DrillingFullCoTDataset
 from opentslm.time_series_datasets.util import (
     extend_time_series_to_match_patch_size_and_aggregate,
 )
@@ -24,18 +29,10 @@ from torch.optim import AdamW
 from torch.nn.utils import clip_grad_norm_
 from torch.utils.data import ConcatDataset, DataLoader, Dataset
 from torch.utils.data.distributed import DistributedSampler
-from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
-from torch.distributed.fsdp import (
-    CPUOffload,
-    MixedPrecision,
-    ShardingStrategy,
-    BackwardPrefetch,
-    FullStateDictConfig,
-    StateDictType,
-)
 from tqdm.auto import tqdm
 from transformers import get_linear_schedule_with_warmup
+
+from accelerate import Accelerator, DeepSpeedPlugin
 
 from opentslm.model.encoder.TransformerCNNEncoder import TransformerCNNEncoder
 from opentslm.model.llm.OpenTSLMFlamingo import OpenTSLMFlamingo
@@ -57,6 +54,57 @@ from opentslm.model_config import (
 )
 
 
+def build_deepspeed_plugin(zero_stage: str, mixed_precision: str):
+    """Build Accelerate DeepSpeedPlugin programmatically.
+
+    Supports configurations like:
+      - "none": No DeepSpeed, plain DDP or single-GPU via Accelerate
+      - "zero1": ZeRO Stage 1 (optimizer state partitioning)
+      - "zero2": ZeRO Stage 2 (+ gradient partitioning, CPU offload for optimizer)
+      - "zero3": ZeRO Stage 3 (+ parameter partitioning, CPU offload for params)
+      - "zero2_ddp": ZeRO-2 sharding within each node, DDP across nodes
+                     (requires setting DEEPSPEED_ZERO_HCCL_* env vars externally)
+    """
+    if zero_stage == "none":
+        return None
+
+    stage_map = {"zero1": 1, "zero2": 2, "zero3": 3, "zero2_ddp": 2}
+    stage = stage_map[zero_stage]
+
+    ds_config = {
+        "zero_optimization": {
+            "stage": stage,
+            "allgather_partitions": True,
+            "allgather_bucket_size": 2e8,
+            "reduce_scatter": True,
+            "reduce_bucket_size": 2e8,
+            "overlap_comm": True,
+        },
+        "gradient_clipping": GRAD_CLIP_NORM,
+        "train_batch_size": "auto",
+        "train_micro_batch_size_per_gpu": "auto",
+        "gradient_accumulation_steps": "auto",
+    }
+
+    if stage >= 2:
+        ds_config["zero_optimization"]["offload_optimizer"] = {
+            "device": "cpu",
+            "pin_memory": True,
+        }
+    if stage == 3:
+        ds_config["zero_optimization"]["offload_param"] = {
+            "device": "cpu",
+            "pin_memory": True,
+        }
+
+    if mixed_precision == "bf16":
+        ds_config["bf16"] = {"enabled": True}
+    elif mixed_precision == "fp16":
+        ds_config["fp16"] = {"enabled": True, "loss_scale": 0, "initial_scale_power": 16}
+
+    return DeepSpeedPlugin(hf_ds_config=ds_config)
+
+
 # Global stage configuration - users can modify this to mix and match stages
 CURRICULUM_STAGES = [
     "stage1_mcq",
@@ -65,6 +113,18 @@ CURRICULUM_STAGES = [
     "stage4_sleep_cot",
     "stage5_ecg_cot",
 ]
+
+# Drilling-specific curriculum stages (same 5-stage progression)
+DRILLING_CURRICULUM_STAGES = [
+    "stage1_drilling_mcq",
+    "stage2_drilling_caption",
+    "stage3_drilling_cot",
+    "stage4_drilling_code_cot",
+    "stage5_drilling_full_cot",
+]
+
+# Combined set of all known stages for argparse validation
+ALL_STAGES = CURRICULUM_STAGES + DRILLING_CURRICULUM_STAGES
 
 
 class CurriculumTrainer:
@@ -110,6 +170,9 @@ class CurriculumTrainer:
         dist_backend: str = "nccl",
         local_rank: int = int(os.environ.get("LOCAL_RANK", 0)),
         llm_id: str = None,
+        deepspeed: str = "none",
+        mixed_precision: str = "bf16",
+        gradient_accumulation_steps: int = 1,
     ):
         """
         Initialize the curriculum trainer.
@@ -122,27 +185,39 @@ class CurriculumTrainer:
             dist_backend: Distributed backend
             local_rank: Local GPU rank
             llm_id: LLM model ID (e.g., 'google/medgemma-2b', 'meta-llama/Llama-3.2-1B')
+            deepspeed: DeepSpeed Zero stage - "none", "zero1", "zero2", "zero3", or "zero2_ddp"
+                       With 8 GPUs and "zero2_ddp", shards across each 4 GPUs and does DDP across the 2 groups.
+                       With "zero3", full sharding across all GPUs.
+                       With "none", plain DDP via Accelerate.
+            mixed_precision: Mixed precision mode - "no", "fp16", "bf16"
+            gradient_accumulation_steps: Number of gradient accumulation steps
         """
         self.model_type = model_type
-        self.device = device or self._get_device()
-        if self.device == "mps":
-            print(
-                "🚨 Warning: Using MPS, might not be fully compatible with the model. Use CUDA for best results."
-            )
         self.llm_id = llm_id
         self.llm_id_safe = self._sanitize_llm_id(llm_id)
-
-        # Distributed training parameters
         self.gradient_checkpointing = gradient_checkpointing
-        self.dist_url = dist_url
-        self.dist_backend = dist_backend
-        self.local_rank = local_rank
+        self.deepspeed_stage = deepspeed
+        self.mixed_precision = mixed_precision
+        self.gradient_accumulation_steps = gradient_accumulation_steps
 
-        # Initialize distributed training if needed
-        self.rank = 0
-        self.world_size = 1
-        if self._should_use_distributed():
-            self._init_distributed()
+        # Build Accelerator (replaces manual DDP / FSDP setup)
+        ds_plugin = build_deepspeed_plugin(deepspeed, mixed_precision)
+        self.accelerator = Accelerator(
+            mixed_precision=mixed_precision if ds_plugin is None else None,
+            deepspeed_plugin=ds_plugin,
+            gradient_accumulation_steps=gradient_accumulation_steps,
+        )
+
+        self.device = self.accelerator.device
+        self.rank = self.accelerator.process_index
+        self.world_size = self.accelerator.num_processes
+        self.local_rank = int(os.environ.get("LOCAL_RANK", 0))
+
+        if self.accelerator.is_main_process:
+            print(f"Initialized training with {self.world_size} processes via Accelerate")
+            print(f"  DeepSpeed: {deepspeed}")
+            print(f"  Mixed precision: {mixed_precision}")
+            print(f"  Gradient accumulation: {gradient_accumulation_steps}")
 
         self.model = self._initialize_model()
         self.results_dir = os.path.join("results", self.llm_id_safe, self.model_type)
@@ -158,7 +233,11 @@ class CurriculumTrainer:
             return "cpu"
 
     def _initialize_model(self):
-        """Initialize the specified model type."""
+        """Initialize the specified model type.
+
+        Note: The model is NOT wrapped here. Accelerator.prepare() handles
+        DDP / DeepSpeed wrapping later in _train_stage when optimizer is ready.
+        """
         if self.model_type == "OpenTSLMSP":
             model = OpenTSLMSP(llm_id=self.llm_id, device=self.device).to(self.device)
 
@@ -171,15 +250,6 @@ class CurriculumTrainer:
             ).to(self.device)
         else:
             raise ValueError(f"Unknown model type: {self.model_type}")
-
-        # Use DDP for multi-GPU training (simpler and than FSDP)
-        if self.world_size > 1:
-            model = DDP(
-                model,
-                device_ids=[self.local_rank] if torch.cuda.is_available() else None,
-            )
-            if self.rank == 0:
-                print(f"Wrapped {self.model_type} with DDP for distributed training")
 
         return model
 
@@ -200,7 +270,7 @@ class CurriculumTrainer:
         os.makedirs(model_dir, exist_ok=True)
 
         # Create stage directories based on global configuration
-        for stage in CURRICULUM_STAGES:
+        for stage in ALL_STAGES:
             stage_dir = os.path.join(model_dir, stage)
             os.makedirs(stage_dir, exist_ok=True)
             os.makedirs(os.path.join(stage_dir, "checkpoints"), exist_ok=True)
@@ -307,11 +377,14 @@ class CurriculumTrainer:
         patch_size: int,
         distribute_data: bool = False,
     ) -> DataLoader:
-        """Create a merged data loader from multiple datasets."""
+        """Create a merged data loader from multiple datasets.
+
+        Note: When distribute_data=True, a DistributedSampler is used so that
+        accelerator.prepare() will recognise it and set epochs correctly.
+        """
         merged_ds = ConcatDataset(datasets)
 
-        # Use distributed sampler if distributed training is enabled
-        if distribute_data and dist.is_initialized():
+        if distribute_data and self.world_size > 1:
             sampler = DistributedSampler(
                 merged_ds, num_replicas=self.world_size, rank=self.rank, shuffle=shuffle
             )
@@ -339,11 +412,11 @@ class CurriculumTrainer:
         """Save model checkpoint for a specific stage."""
         checkpoint_dir = os.path.join(self.results_dir, stage, "checkpoints")
 
-        # Only save on rank 0 for distributed training
-        if dist.is_initialized() and self.rank != 0:
+        # Only save on main process
+        if not self.accelerator.is_main_process:
             return
 
-        # Get the underlying model (handles DDP wrapping)
+        # Get the underlying model (handles Accelerate wrapping)
         model = self._get_model()
 
         if self.model_type == "OpenTSLMSP":
@@ -359,13 +432,7 @@ class CurriculumTrainer:
             # Add LoRA state to checkpoint
             model.save_lora_state_to_checkpoint(checkpoint)
         else:
-            # Handle DDP or single GPU case for OpenTSLMFlamingo
             model_state = model.state_dict()
-            if hasattr(self.model, "module"):
-                # Remove 'module.' prefix for DDP
-                model_state = {
-                    k.replace("module.", ""): v for k, v in model_state.items()
-                }
             checkpoint = {
                 "model_state": model_state,
                 "optimizer_state": optimizer.state_dict(),
@@ -377,43 +444,36 @@ class CurriculumTrainer:
         checkpoint_path = os.path.join(checkpoint_dir, "best_model.pt")
 
         # Check disk space before saving
-        if self.rank == 0:
-            import shutil
+        import shutil
 
-            total, used, free = shutil.disk_usage(checkpoint_dir)
-            free_gb = free / (1024**3)
-            print(f"💾 Disk space: {free_gb:.2f} GB free in {checkpoint_dir}")
+        total, used, free = shutil.disk_usage(checkpoint_dir)
+        free_gb = free / (1024**3)
+        print(f"💾 Disk space: {free_gb:.2f} GB free in {checkpoint_dir}")
 
-            # Estimate checkpoint size (rough estimate)
-            estimated_size_gb = sum(
-                p.numel() * p.element_size() for p in self._get_model().parameters()
-            ) / (1024**3)
-            if (
-                free_gb < estimated_size_gb * 2
-            ):  # Need at least 2x the size for safe writing
-                print(
-                    f"⚠️  Warning: Low disk space. Need ~{estimated_size_gb:.2f} GB, have {free_gb:.2f} GB free"
-                )
+        estimated_size_gb = sum(
+            p.numel() * p.element_size() for p in self._get_model().parameters()
+        ) / (1024**3)
+        if free_gb < estimated_size_gb * 2:
+            print(
+                f"⚠️  Warning: Low disk space. Need ~{estimated_size_gb:.2f} GB, have {free_gb:.2f} GB free"
+            )
 
-        # Try to save with error handling
         try:
             torch.save(checkpoint, checkpoint_path)
         except Exception as e:
-            if self.rank == 0:
-                print(f"❌ Failed to save checkpoint: {e}")
-                print(f"   Checkpoint path: {checkpoint_path}")
-                print(
-                    f"   Checkpoint size: {sum(p.numel() * p.element_size() for p in self._get_model().parameters()) / 1024**3:.2f} GB"
-                )
-
-                raise RuntimeError(f"Failed to save checkpoint: {e}")
+            print(f"❌ Failed to save checkpoint: {e}")
+            print(f"   Checkpoint path: {checkpoint_path}")
+            print(
+                f"   Checkpoint size: {sum(p.numel() * p.element_size() for p in self._get_model().parameters()) / 1024**3:.2f} GB"
+            )
+            raise RuntimeError(f"Failed to save checkpoint: {e}")
 
     def _save_loss_history(
         self, stage: str, epoch: int, train_loss: float, val_loss: float
     ):
         """Save loss history to a file for tracking training progress."""
-        if dist.is_initialized() and self.rank != 0:
-            return  # Only save on rank 0 for distributed training
+        if not self.accelerator.is_main_process:
+            return
 
         checkpoint_dir = os.path.join(self.results_dir, stage, "checkpoints")
         loss_history_file = os.path.join(checkpoint_dir, "loss_history.txt")
@@ -433,8 +493,8 @@ class CurriculumTrainer:
 
     def _display_loss_history(self, stage: str):
         """Display the loss history for a stage if available."""
-        if dist.is_initialized() and self.rank != 0:
-            return  # Only display on rank 0 for distributed training
+        if not self.accelerator.is_main_process:
+            return
 
         checkpoint_dir = os.path.join(self.results_dir, stage, "checkpoints")
         loss_history_file = os.path.join(checkpoint_dir, "loss_history.txt")
@@ -563,11 +623,17 @@ class CurriculumTrainer:
     ) -> Optional[Dict[str, Any]]:
         """Load the best model from the previous stage and return its metrics."""
         try:
-            current_idx = CURRICULUM_STAGES.index(current_stage)
+            # Determine which stage list this stage belongs to
+            if current_stage in DRILLING_CURRICULUM_STAGES:
+                stage_list = DRILLING_CURRICULUM_STAGES
+            else:
+                stage_list = CURRICULUM_STAGES
+
+            current_idx = stage_list.index(current_stage)
             if current_idx == 0:
                 # First stage, no previous model to load
                 return None
-            previous_stage = CURRICULUM_STAGES[current_idx - 1]
+            previous_stage = stage_list[current_idx - 1]
             metrics_file = os.path.join(
                 self.results_dir, previous_stage, "results", "metrics.json"
             )
@@ -723,7 +789,7 @@ class CurriculumTrainer:
             self.results_dir,
             stage_name,
             "results",
-            f"test_predictions_rank_{self.rank if dist.is_initialized() else 0}.jsonl",
+            f"test_predictions_rank_{self.rank if self.world_size > 1 else 0}.jsonl",
         )
         final_results_file = os.path.join(
             self.results_dir, stage_name, "results", "test_predictions.jsonl"
@@ -734,7 +800,7 @@ class CurriculumTrainer:
         if self.rank == 0:
             print(f"[Eval] rank={self.rank}, world_size={self.world_size}")
             print(f"Saving per-rank test predictions to: {results_file_rank}")
-            if dist.is_initialized():
+            if self.world_size > 1:
                 print(
                     f"Final merged predictions will be saved to: {final_results_file}"
                 )
@@ -789,15 +855,15 @@ class CurriculumTrainer:
                 results_fp.close()
 
         # Synchronize all ranks before merging
-        if dist.is_initialized():
-            dist.barrier()
+        if self.world_size > 1:
+            self.accelerator.wait_for_everyone()
 
         # Rank 0 merges per-rank files into final results file
-        if (not dist.is_initialized()) or (self.rank == 0):
+        if (not self.world_size > 1) or (self.rank == 0):
             try:
                 # Overwrite final file each evaluation
                 with open(final_results_file, "w", encoding="utf-8") as merged_fp:
-                    if dist.is_initialized():
+                    if self.world_size > 1:
                         num_ranks = self.world_size
                     else:
                         num_ranks = 1
@@ -823,7 +889,7 @@ class CurriculumTrainer:
             metrics["epoch"] = epoch
         if metric_func:
             # Compute metrics on rank 0 after merging, else minimal metrics
-            if (not dist.is_initialized()) or (self.rank == 0):
+            if (not self.world_size > 1) or (self.rank == 0):
                 predictions = []
                 gold_answers = []
                 # Read from final merged file
@@ -839,7 +905,7 @@ class CurriculumTrainer:
                 additional_metrics = metric_func(predictions, gold_answers)
                 metrics.update(additional_metrics)
         # Save results only on rank 0 (or when not distributed)
-        if (not dist.is_initialized()) or (self.rank == 0):
+        if (not self.world_size > 1) or (self.rank == 0):
             # Save metrics
             metrics_file = os.path.join(
                 self.results_dir, stage_name, "results", "metrics.json"
@@ -858,8 +924,8 @@ class CurriculumTrainer:
                     print(f"   {metric}: {value}")
 
         # Signal other ranks that evaluation is complete
-        if dist.is_initialized():
-            dist.barrier()
+        if self.world_size > 1:
+            self.accelerator.wait_for_everyone()
 
         return metrics
 
@@ -946,9 +1012,11 @@ class CurriculumTrainer:
                     print()
             else:
                 # Only allow fresh model for first stage
-                if stage_name != CURRICULUM_STAGES[0]:
+                # Check if this is the first stage of any curriculum
+                first_stages = [CURRICULUM_STAGES[0], DRILLING_CURRICULUM_STAGES[0]]
+                if stage_name not in first_stages:
                     raise RuntimeError(
-                        f"Cannot start {stage_name} with fresh model. Previous stage {CURRICULUM_STAGES[CURRICULUM_STAGES.index(stage_name) - 1]} must be completed first."
+                        f"Cannot start {stage_name} with fresh model. Previous stage must be completed first."
                     )
                 if self.rank == 0:
                     print("🆕 Starting with fresh model (first stage)")
@@ -1042,7 +1110,7 @@ class CurriculumTrainer:
         )
 
         # Scheduler
-        total_steps = num_epochs * len(train_loader)
+        total_steps = num_epochs * len(train_loader) // self.gradient_accumulation_steps
         warmup_steps = int(WARMUP_FRAC * total_steps)
         scheduler = get_linear_schedule_with_warmup(
             optimizer,
@@ -1050,7 +1118,14 @@ class CurriculumTrainer:
             num_training_steps=total_steps,
         )
 
-        if self.rank == 0:
+        # Prepare model, optimizer, dataloaders, scheduler with Accelerate
+        self.model, optimizer, train_loader, val_loader, test_loader, scheduler = (
+            self.accelerator.prepare(
+                self.model, optimizer, train_loader, val_loader, test_loader, scheduler
+            )
+        )
+
+        if self.accelerator.is_main_process:
             print(f"📈 Total training steps: {total_steps}")
             print(f"🔥 Warmup steps: {warmup_steps}")
 
@@ -1062,15 +1137,14 @@ class CurriculumTrainer:
             print(
                 f"📂 Resuming {stage_name} from epoch {best_epoch} (val_loss: {best_val_loss:.4f})"
             )
-            # Display previous loss history if available
             self._display_loss_history(stage_name)
         else:
             print(f"🆕 Starting fresh training for {stage_name}")
-            best_val_loss = float("inf")  # Ensure proper initialization
+            best_val_loss = float("inf")
 
         # Skip training loop if eval_only is True
         if eval_only:
-            if self.rank == 0:
+            if self.accelerator.is_main_process:
                 print(f"⏭️  Skipping training loop (eval_only mode)")
                 print(f"📂 Using existing checkpoint for evaluation")
             epoch = best_epoch
@@ -1090,11 +1164,11 @@ class CurriculumTrainer:
                 prog = tqdm(
                     train_loader,
                     desc=f"Epoch {epoch}/{num_epochs}",
-                    disable=self.rank != 0,
+                    disable=not self.accelerator.is_main_process,
                 )
                 for i, batch in enumerate(prog):
                     # DEBUG PRINT: Only for the first batch of the first epoch
-                    if epoch == start_epoch and i == 0:
+                    if epoch == start_epoch and i == 0 and self.accelerator.is_main_process:
                         print(f"[DEBUG] Batch {i} - batch size: {len(batch)}")
                         if isinstance(batch, list) and isinstance(batch[0], dict):
                             for k, v in batch[0].items():
@@ -1104,32 +1178,34 @@ class CurriculumTrainer:
                                     print(
                                         f"[DEBUG] Sample key '{k}' list length: {len(v)}"
                                     )
-                        import torch
-
                         print(
                             torch.cuda.memory_summary()
                             if torch.cuda.is_available()
                             else "No CUDA"
                         )
-                    optimizer.zero_grad()
-                    loss = self._get_model().compute_loss(batch)
-                    loss.backward()
 
-                    # Handle gradient clipping for distributed training
-                    clip_grad_norm_(self._get_model().parameters(), GRAD_CLIP_NORM)
+                    with self.accelerator.accumulate(self.model):
+                        loss = self._get_model().compute_loss(batch)
+                        self.accelerator.backward(loss)
 
-                    optimizer.step()
-                    scheduler.step()
+                        if self.accelerator.sync_gradients:
+                            self.accelerator.clip_grad_norm_(
+                                self.model.parameters(), GRAD_CLIP_NORM
+                            )
+
+                        optimizer.step()
+                        scheduler.step()
+                        optimizer.zero_grad()
 
                     running_loss += loss.item()
-                    if self.rank == 0:
+                    if self.accelerator.is_main_process:
                         prog.set_postfix(
                             loss=f"{loss.item():.4f}",
                             lr=f"{scheduler.get_last_lr()[0]:.2e}",
                         )
 
                 avg_train_loss = running_loss / len(train_loader)
-                if self.rank == 0:
+                if self.accelerator.is_main_process:
                     tqdm.write(f"Epoch {epoch} — train loss: {avg_train_loss:.4f}")
 
                 # Validation
@@ -1139,35 +1215,33 @@ class CurriculumTrainer:
                     for batch in tqdm(
                         val_loader,
                         desc=f"Validating {stage_name}",
-                        disable=self.rank != 0,
+                        disable=not self.accelerator.is_main_process,
                     ):
                         val_loss += self._get_model().compute_loss(batch).item()
 
                 avg_val_loss = val_loss / len(val_loader)
 
                 # Synchronize validation loss across all ranks
-                if dist.is_initialized():
+                if self.world_size > 1:
                     val_loss_tensor = torch.tensor(avg_val_loss, device=self.device)
-                    dist.all_reduce(val_loss_tensor, op=dist.ReduceOp.SUM)
-                    avg_val_loss = val_loss_tensor.item() / self.world_size
+                    val_loss_tensor = self.accelerator.reduce(val_loss_tensor, reduction="mean")
+                    avg_val_loss = val_loss_tensor.item()
 
-                if self.rank == 0:
+                if self.accelerator.is_main_process:
                     tqdm.write(f"Epoch {epoch} — val   loss: {avg_val_loss:.4f}")
                     tqdm.write(f"Epoch {epoch} — best  loss: {best_val_loss:.4f}")
 
                 # Save loss history for this epoch
                 self._save_loss_history(stage_name, epoch, avg_train_loss, avg_val_loss)
 
-                # Early stopping - all ranks need to make the same decision
+                # Early stopping - broadcast decision from rank 0
                 should_save = avg_val_loss + 1e-4 < best_val_loss
-                if dist.is_initialized():
+                if self.world_size > 1:
                     save_tensor = torch.tensor(
                         1 if should_save else 0, device=self.device
                     )
-                    dist.all_reduce(save_tensor, op=dist.ReduceOp.SUM)
-                    should_save = (
-                        save_tensor.item() > 0
-                    )  # If any rank thinks we should save, we save
+                    save_tensor = self.accelerator.reduce(save_tensor, reduction="sum")
+                    should_save = save_tensor.item() > 0
 
                 if should_save:
                     best_val_loss = avg_val_loss
@@ -1175,18 +1249,17 @@ class CurriculumTrainer:
                     self._save_checkpoint(
                         stage_name, epoch, avg_val_loss, optimizer, scheduler
                     )
-                    if self.rank == 0:
+                    if self.accelerator.is_main_process:
                         tqdm.write("✔️  New best model saved.\n")
                 else:
                     epochs_no_improve += 1
-                    if self.rank == 0:
+                    if self.accelerator.is_main_process:
                         tqdm.write(
                             f"No improvement for {epochs_no_improve}/{EARLY_STOP_PAT} epochs.\n"
                         )
 
-                    # Synchronize early stopping decision across all ranks
                     if epochs_no_improve >= EARLY_STOP_PAT:
-                        if self.rank == 0:
+                        if self.accelerator.is_main_process:
                             tqdm.write(
                                 f"\nEarly stopping triggered after {epoch} epochs."
                             )
@@ -1196,11 +1269,11 @@ class CurriculumTrainer:
                         break
 
                 # Synchronize best_val_loss and epochs_no_improve across all ranks
-                if dist.is_initialized():
+                if self.world_size > 1:
                     best_loss_tensor = torch.tensor(best_val_loss, device=self.device)
                     epochs_tensor = torch.tensor(epochs_no_improve, device=self.device)
-                    dist.broadcast(best_loss_tensor, src=0)
-                    dist.broadcast(epochs_tensor, src=0)
+                    best_loss_tensor = self.accelerator.reduce(best_loss_tensor, reduction="mean")
+                    epochs_tensor = self.accelerator.reduce(epochs_tensor, reduction="mean")
                     best_val_loss = best_loss_tensor.item()
                     epochs_no_improve = int(epochs_tensor.item())
 
@@ -1355,6 +1428,90 @@ class CurriculumTrainer:
             sampler=sampler,
         )
 
+    # ── Drilling curriculum stages ──────────────────────────────────────
+
+    def stage1_drilling_mcq(
+        self, batch_size: int = None, eval_only: bool = False
+    ) -> Dict[str, Any]:
+        """Stage 1 (Drilling): MCQ operation classification from sensor data."""
+        return self._train_stage(
+            stage_name="stage1_drilling_mcq",
+            dataset_class=DrillingMCQDataset,
+            num_epochs=30,
+            lr_encoder=2e-4,
+            lr_projector=1e-4,
+            lr_base=2e-4,
+            metric_func=lambda preds, golds: {
+                "accuracy": self._calculate_accuracy(preds, golds)
+            },
+            batch_size=batch_size,
+            eval_only=eval_only,
+        )
+
+    def stage2_drilling_caption(
+        self, batch_size: int = None, eval_only: bool = False
+    ) -> Dict[str, Any]:
+        """Stage 2 (Drilling): Caption/describe drilling sensor data."""
+        return self._train_stage(
+            stage_name="stage2_drilling_caption",
+            dataset_class=DrillingCaptionDataset,
+            num_epochs=20,
+            lr_encoder=2e-4,
+            lr_projector=1e-4,
+            lr_base=2e-4,
+            metric_func=None,
+            batch_size=batch_size,
+            eval_only=eval_only,
+        )
+
+    def stage3_drilling_cot(
+        self, batch_size: int = None, eval_only: bool = False
+    ) -> Dict[str, Any]:
+        """Stage 3 (Drilling): CoT reasoning about drilling operations."""
+        return self._train_stage(
+            stage_name="stage3_drilling_cot",
+            dataset_class=DrillingCoTDataset,
+            num_epochs=30,
+            lr_encoder=2e-4,
+            lr_projector=1e-4,
+            lr_base=2e-4,
+            metric_func=None,
+            batch_size=batch_size,
+            eval_only=eval_only,
+        )
+
+    def stage4_drilling_code_cot(
+        self, batch_size: int = None, eval_only: bool = False
+    ) -> Dict[str, Any]:
+        """Stage 4 (Drilling): CoT reasoning predicting operation + code."""
+        return self._train_stage(
+            stage_name="stage4_drilling_code_cot",
+            dataset_class=DrillingCodeCoTDataset,
+            num_epochs=60,
+            lr_encoder=2e-4,
+            lr_projector=1e-4,
+            lr_base=2e-4,
+            metric_func=None,
+            batch_size=batch_size,
+            eval_only=eval_only,
+        )
+
+    def stage5_drilling_full_cot(
+        self, batch_size: int = None, eval_only: bool = False
+    ) -> Dict[str, Any]:
+        """Stage 5 (Drilling): Full CoT with operation + code + subcode."""
+        return self._train_stage(
+            stage_name="stage5_drilling_full_cot",
+            dataset_class=DrillingFullCoTDataset,
+            num_epochs=60,
+            lr_encoder=2e-4,
+            lr_projector=1e-4,
+            lr_base=2e-4,
+            metric_func=None,
+            batch_size=batch_size,
+            eval_only=eval_only,
+        )
+
     def run_curriculum(
         self, stages: List[str] = None, batch_size: int = None, eval_only: bool = False
     ):
@@ -1389,47 +1546,13 @@ class CurriculumTrainer:
         # Run only incomplete stages
         for stage in incomplete_stages:
             # Synchronize all ranks before starting each stage
-            if dist.is_initialized():
-                dist.barrier()
+            if self.world_size > 1:
+                self.accelerator.wait_for_everyone()
 
-            if stage == "stage1_mcq":
-                stage_results = self.stage1_mcq(
-                    batch_size=batch_size, eval_only=eval_only
-                )
-                results[stage] = stage_results
-                self._mark_stage_completed(stage, stage_results)
-            elif stage == "stage2_captioning":
-                stage_results = self.stage2_captioning(
-                    batch_size=batch_size, eval_only=eval_only
-                )
-                results[stage] = stage_results
-                self._mark_stage_completed(stage, stage_results)
-            elif stage == "stage3_cot":
-                stage_results = self.stage3_cot(
-                    batch_size=batch_size, eval_only=eval_only
-                )
-                results[stage] = stage_results
-                self._mark_stage_completed(stage, stage_results)
-            elif stage == "stage4_sleep_cot":
-                stage_results = self.stage4_sleep_cot(
-                    batch_size=batch_size, eval_only=eval_only
-                )
-                results[stage] = stage_results
-                self._mark_stage_completed(stage, stage_results)
-            elif stage == "stage5_ecg_cot":
-                stage_results = self.stage5_ecg_cot(
-                    batch_size=batch_size, eval_only=eval_only
-                )
-                results[stage] = stage_results
-                self._mark_stage_completed(stage, stage_results)
-            elif stage == "stage4_sleep_cot":
-                stage_results = self.stage4_sleep_cot(
-                    batch_size=batch_size, eval_only=eval_only
-                )
-                results[stage] = stage_results
-                self._mark_stage_completed(stage, stage_results)
-            elif stage == "stage5_ecg_cot":
-                stage_results = self.stage5_ecg_cot(
+            # Dispatch to the appropriate stage method by name
+            stage_method = getattr(self, stage, None)
+            if stage_method is not None:
+                stage_results = stage_method(
                     batch_size=batch_size, eval_only=eval_only
                 )
                 results[stage] = stage_results
@@ -1439,8 +1562,8 @@ class CurriculumTrainer:
                     print(f"⚠️  Unknown stage: {stage}, skipping...")
 
             # Synchronize all ranks after completing each stage
-            if dist.is_initialized():
-                dist.barrier()
+            if self.world_size > 1:
+                self.accelerator.wait_for_everyone()
 
         # Save overall results only on rank 0
         if self.rank == 0:
@@ -1456,37 +1579,7 @@ class CurriculumTrainer:
 
         return results
 
-    def _should_use_distributed(self) -> bool:
-        """Check if distributed training should be used."""
-        return ("WORLD_SIZE" in os.environ and int(os.environ["WORLD_SIZE"]) > 1) or (
-            "LOCAL_RANK" in os.environ and int(os.environ["LOCAL_RANK"]) >= 0
-        )
-
-    def _init_distributed(self):
-        """Initialize distributed training."""
-        if "WORLD_SIZE" in os.environ:
-            self.world_size = int(os.environ["WORLD_SIZE"])
-        if "RANK" in os.environ:
-            self.rank = int(os.environ["RANK"])
-        elif "LOCAL_RANK" in os.environ:
-            self.rank = int(os.environ["LOCAL_RANK"])
-
-        # Initialize process group
-        dist.init_process_group(
-            backend=self.dist_backend,
-            init_method=self.dist_url,
-            world_size=self.world_size,
-            rank=self.rank,
-            timeout=datetime.timedelta(hours=999),
-        )
-
-        # Set device for this process
-        if torch.cuda.is_available():
-            torch.cuda.set_device(self.local_rank)
-            self.device = torch.device("cuda", self.local_rank)
-
-        if self.rank == 0:
-            print(f"Initialized distributed training with {self.world_size} GPUs")
+    # Distributed init is handled by Accelerate — no manual _init_distributed needed.
 
     def _is_stage_completed(self, stage: str) -> bool:
         """Check if a stage is completed by verifying both training and evaluation were successful."""
@@ -1532,10 +1625,8 @@ class CurriculumTrainer:
             print(f"✅ Stage {stage} marked as completed")
 
     def _get_model(self):
-        """Get the underlying model (handles DDP wrapping)."""
-        if hasattr(self.model, "module"):
-            return self.model.module
-        return self.model
+        """Get the underlying model (handles Accelerate / DDP / DeepSpeed wrapping)."""
+        return self.accelerator.unwrap_model(self.model)
 
     def _checkpoint_exists(self, stage: str) -> bool:
         """Check if a checkpoint exists for a specific stage."""
@@ -1552,8 +1643,15 @@ class CurriculumTrainer:
         # Get the underlying model (handles DDP wrapping)
         model = self._get_model()
 
-        # Enable LoRA for stages after stage2_captioning
-        stages_with_lora = ["stage3_cot", "stage4_sleep_cot", "stage5_ecg_cot"]
+        # Enable LoRA for stages after stage2 (both original and drilling)
+        stages_with_lora = [
+            "stage3_cot", "stage4_sleep_cot", "stage5_ecg_cot",
+            "stage3_drilling_cot", "stage4_drilling_code_cot", "stage5_drilling_full_cot",
+        ]
+        stages_no_lora = [
+            "stage1_mcq", "stage2_captioning",
+            "stage1_drilling_mcq", "stage2_drilling_caption",
+        ]
 
         if stage_name in stages_with_lora:
             if not getattr(model, "lora_enabled", False):
@@ -1572,42 +1670,7 @@ class CurriculumTrainer:
                     print(f"✅ LoRA already enabled for {stage_name}")
         else:
             if self.rank == 0:
-                if stage_name in ["stage1_mcq", "stage2_captioning"]:
-                    print(
-                        f"ℹ️  LoRA disabled for {stage_name} (only enabled for stages 3+)"
-                    )
-                else:
-                    print(f"ℹ️  LoRA not configured for {stage_name}")
-
-    def _enable_lora_if_needed(self, stage_name: str):
-        """Enable LoRA for OpenTSLMSP models in stages after stage2."""
-        if self.model_type != "OpenTSLMSP":
-            return  # LoRA only for OpenTSLMSP
-
-        # Get the underlying model (handles DDP wrapping)
-        model = self._get_model()
-
-        # Enable LoRA for stages after stage2_captioning
-        stages_with_lora = ["stage3_cot", "stage4_sleep_cot", "stage5_ecg_cot"]
-
-        if stage_name in stages_with_lora:
-            if not getattr(model, "lora_enabled", False):
-                if self.rank == 0:
-                    print(f"🔧 Enabling LoRA for {stage_name}")
-                try:
-                    model.enable_lora(lora_r=16, lora_alpha=32, lora_dropout=0.0)
-                    if self.rank == 0:
-                        print(f"✅ LoRA enabled for {stage_name}")
-                except Exception as e:
-                    if self.rank == 0:
-                        print(f"❌ Failed to enable LoRA for {stage_name}: {e}")
-                        print("   Continuing without LoRA...")
-            else:
-                if self.rank == 0:
-                    print(f"✅ LoRA already enabled for {stage_name}")
-        else:
-            if self.rank == 0:
-                if stage_name in ["stage1_mcq", "stage2_captioning"]:
+                if stage_name in stages_no_lora:
                     print(
                         f"ℹ️  LoRA disabled for {stage_name} (only enabled for stages 3+)"
                     )
@@ -1629,9 +1692,13 @@ def main():
     parser.add_argument(
         "--stages",
         nargs="+",
-        choices=CURRICULUM_STAGES,
+        choices=ALL_STAGES,
         default=CURRICULUM_STAGES,
-        help="Stages to run (default: all stages)",
+        help=(
+            "Stages to run (default: original OpenTSLM stages). "
+            "For drilling: use --stages stage1_drilling_mcq stage2_drilling_caption "
+            "stage3_drilling_cot stage4_drilling_code_cot stage5_drilling_full_cot"
+        ),
     )
     parser.add_argument(
         "--device", type=str, default=None, help="Device to use (cuda, mps, cpu)"
@@ -1656,30 +1723,42 @@ def main():
         "--llm_id",
         type=str,
         default="meta-llama/Llama-3.2-1B",
-        help="LLM model ID for OpenTSLMFlamingo (e.g., 'google/medgemma-2b', 'meta-llama/Llama-3.2-1B')",
+        help="LLM model ID (e.g., 'google/medgemma-2b', 'meta-llama/Llama-3.2-1B')",
     )
 
-    # Distributed training arguments
+    # Training arguments
     parser.add_argument(
         "--gradient_checkpointing",
         default=False,
         action="store_true",
         help="Enable gradient checkpointing",
     )
+
+    # Accelerate / DeepSpeed arguments
     parser.add_argument(
-        "--dist_url",
-        default="env://",
+        "--deepspeed",
         type=str,
-        help="URL used to set up distributed training",
+        default="none",
+        choices=["none", "zero1", "zero2", "zero3", "zero2_ddp"],
+        help=(
+            "DeepSpeed Zero stage. "
+            "'none' = plain DDP via Accelerate. "
+            "'zero2_ddp' = shard across local GPUs (e.g. 4), DDP across nodes. "
+            "'zero3' = full sharding across all GPUs."
+        ),
     )
     parser.add_argument(
-        "--dist_backend", default="nccl", type=str, help="Distributed backend"
+        "--mixed_precision",
+        type=str,
+        default="bf16",
+        choices=["no", "fp16", "bf16"],
+        help="Mixed precision mode",
     )
     parser.add_argument(
-        "--local_rank",
+        "--gradient_accumulation_steps",
         type=int,
-        default=int(os.environ.get("LOCAL_RANK", 0)),
-        help="Local GPU rank",
+        default=1,
+        help="Gradient accumulation steps",
     )
 
     # Logging arguments
@@ -1698,10 +1777,10 @@ def main():
         args.model,
         args.device,
         gradient_checkpointing=args.gradient_checkpointing,
-        dist_url=args.dist_url,
-        dist_backend=args.dist_backend,
-        local_rank=args.local_rank,
         llm_id=args.llm_id,
+        deepspeed=args.deepspeed,
+        mixed_precision=args.mixed_precision,
+        gradient_accumulation_steps=args.gradient_accumulation_steps,
     )
 
     # Run curriculum

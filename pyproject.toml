@@ -55,12 +55,18 @@ dependencies = [
     "einops>=0.6",
     "wfdb>=4.0",
     "open-flamingo>=0.0.2",
+    "accelerate>=0.25",
 ]
 
 [project.urls]
 Homepage = "https://opentslm.com"
 Repository = "https://github.com/StanfordBDHG/OpenTSLM"
 "Bug Tracker" = "https://github.com/StanfordBDHG/OpenTSLM/issues"
+
+[project.optional-dependencies]
+deepspeed = [
+    "deepspeed>=0.12",
+]
 
 [dependency-groups]
 dev = [

@@ -12,7 +12,7 @@ import re
 from pathlib import Path
 from tqdm import tqdm
 
-from opentslm.time_series_datasets.sleep.SleepEDFCoTQADataset import SleepEDFCoTQADataset
+from industslm.time_series_datasets.sleep.SleepEDFCoTQADataset import SleepEDFCoTQADataset
 
 # We'll determine supported labels dynamically from the actual ground truth data
 # Start with the dataset class labels as a fallback

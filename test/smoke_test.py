@@ -6,10 +6,10 @@
 import importlib
 
 mods = [
-    "opentslm",
-    "opentslm.model.llm.OpenTSLM",
-    "opentslm.model.llm.OpenTSLMFlamingo",
-    "opentslm.prompt.full_prompt",
+    "industslm",
+    "industslm.model.llm.OpenTSLM",
+    "industslm.model.llm.OpenTSLMFlamingo",
+    "industslm.prompt.full_prompt",
 ]
 
 [importlib.import_module(m) for m in mods]

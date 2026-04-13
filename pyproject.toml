@@ -41,7 +41,7 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://opentslm.com"
+Homepage = "https://industslm.com"
 Repository = "https://github.com/StanfordBDHG/OpenTSLM"
 "Bug Tracker" = "https://github.com/StanfordBDHG/OpenTSLM/issues"
 

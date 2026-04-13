@@ -9,7 +9,7 @@ from typing import Dict, Any, List, Tuple
 
 
 from common_evaluator import CommonEvaluator
-from opentslm.time_series_datasets.ecg_qa.ECGQACoTQADataset import ECGQACoTQADataset
+from industslm.time_series_datasets.ecg_qa.ECGQACoTQADataset import ECGQACoTQADataset
 
 
 def extract_answer(text: str) -> str:

@@ -28,12 +28,12 @@ from typing import List, Dict, Any
 import json
 
 
-from opentslm.model.llm.OpenTSLMFlamingo import OpenTSLMFlamingo
-from opentslm.time_series_datasets.pamap2.PAMAP2CoTQADataset import PAMAP2CoTQADataset
-from opentslm.prompt.full_prompt import FullPrompt
-from opentslm.prompt.text_prompt import TextPrompt
-from opentslm.prompt.text_time_series_prompt import TextTimeSeriesPrompt
-from opentslm.time_series_datasets.util import (
+from industslm.model.llm.OpenTSLMFlamingo import OpenTSLMFlamingo
+from industslm.time_series_datasets.pamap2.PAMAP2CoTQADataset import PAMAP2CoTQADataset
+from industslm.prompt.full_prompt import FullPrompt
+from industslm.prompt.text_prompt import TextPrompt
+from industslm.prompt.text_time_series_prompt import TextTimeSeriesPrompt
+from industslm.time_series_datasets.util import (
     extend_time_series_to_match_patch_size_and_aggregate,
 )
 

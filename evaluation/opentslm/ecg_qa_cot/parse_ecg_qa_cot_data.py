@@ -16,7 +16,7 @@ from collections import Counter, defaultdict
 from tqdm import tqdm
 
 # Import dataset via package namespace
-from opentslm.time_series_datasets.ecg_qa.ECGQACoTQADataset import ECGQACoTQADataset
+from industslm.time_series_datasets.ecg_qa.ECGQACoTQADataset import ECGQACoTQADataset
 
 
 def calculate_f1_score(prediction, ground_truth, possible_answers):

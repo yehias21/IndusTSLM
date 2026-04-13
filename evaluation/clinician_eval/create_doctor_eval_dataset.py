@@ -22,8 +22,8 @@ from typing import Dict, List, Tuple
 from collections import defaultdict
 from tqdm import tqdm
 
-from opentslm.time_series_datasets.ecg_qa.ECGQACoTQADataset import ECGQACoTQADataset
-from opentslm.time_series_datasets.ecg_qa.plot_example import get_ptbxl_ecg_path
+from industslm.time_series_datasets.ecg_qa.ECGQACoTQADataset import ECGQACoTQADataset
+from industslm.time_series_datasets.ecg_qa.plot_example import get_ptbxl_ecg_path
 
 # Configuration
 MODEL_PREDICTIONS_FILE = "/Users/planger/Development/EmbedHealth/evaluation/opentslm/ecg_qa_cot/llama3b_flamingo_predictions.jsonl"

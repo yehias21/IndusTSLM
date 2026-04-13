@@ -59,4 +59,4 @@ jobs:
         run: |
           echo "### Published OpenTSLM to ${{ inputs.target }} :rocket:" >> $GITHUB_STEP_SUMMARY
           echo "Version: `$(uv version --short)`" >> $GITHUB_STEP_SUMMARY
-          echo "URL: https://${{ inputs.target == 'TestPyPI' && 'test.' || '' }}pypi.org/project/opentslm/$(uv version --short)/" >> $GITHUB_STEP_SUMMARY
+          echo "URL: https://${{ inputs.target == 'TestPyPI' && 'test.' || '' }}pypi.org/project/industslm/$(uv version --short)/" >> $GITHUB_STEP_SUMMARY

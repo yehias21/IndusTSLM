@@ -21,16 +21,16 @@ _NVML_AVAILABLE = True
 
 
 # Models
-from opentslm.model.llm.OpenTSLMFlamingo import OpenTSLMFlamingo
-from opentslm.model.llm.OpenTSLMSP import OpenTSLMSP
+from industslm.model.llm.OpenTSLMFlamingo import OpenTSLMFlamingo
+from industslm.model.llm.OpenTSLMSP import OpenTSLMSP
 
 # Datasets
-from opentslm.time_series_datasets.TSQADataset import TSQADataset
-from opentslm.time_series_datasets.har_cot.HARCoTQADataset import HARCoTQADataset
-from opentslm.time_series_datasets.sleep.SleepEDFCoTQADataset import SleepEDFCoTQADataset
-from opentslm.time_series_datasets.ecg_qa.ECGQACoTQADataset import ECGQACoTQADataset
-from opentslm.time_series_datasets.simulation.SimulationQADataset import SimulationQADataset
-from opentslm.time_series_datasets.util import (
+from industslm.time_series_datasets.TSQADataset import TSQADataset
+from industslm.time_series_datasets.har_cot.HARCoTQADataset import HARCoTQADataset
+from industslm.time_series_datasets.sleep.SleepEDFCoTQADataset import SleepEDFCoTQADataset
+from industslm.time_series_datasets.ecg_qa.ECGQACoTQADataset import ECGQACoTQADataset
+from industslm.time_series_datasets.simulation.SimulationQADataset import SimulationQADataset
+from industslm.time_series_datasets.util import (
     extend_time_series_to_match_patch_size_and_aggregate,
 )
 

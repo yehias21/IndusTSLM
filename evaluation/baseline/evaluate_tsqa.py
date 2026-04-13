@@ -8,7 +8,7 @@ import sys
 from typing import Dict, Any
 
 from common_evaluator import CommonEvaluator
-from opentslm.time_series_datasets.TSQADataset import TSQADataset
+from industslm.time_series_datasets.TSQADataset import TSQADataset
 
 
 def evaluate_tsqa(ground_truth: str, prediction: str) -> Dict[str, Any]:

@@ -10,12 +10,12 @@ Test script for the PAMAP2 CoT loader.
 """
 
 import unittest
-from opentslm.logger import get_logger, set_global_verbose
-from opentslm.time_series_datasets.pamap2.BalancedBatchSampler import BalancedBatchSampler
+from industslm.logger import get_logger, set_global_verbose
+from industslm.time_series_datasets.pamap2.BalancedBatchSampler import BalancedBatchSampler
 
 # Import and set up global logger with verbose mode
-from opentslm.logger import get_logger, set_global_verbose
-from opentslm.time_series_datasets.pamap2.BalancedBatchSampler import BalancedBatchSampler
+from industslm.logger import get_logger, set_global_verbose
+from industslm.time_series_datasets.pamap2.BalancedBatchSampler import BalancedBatchSampler
 class TestPAMAP2CoTLoader(unittest.TestCase):
     """
     Unit tests for the PAMAP2 CoT loader functions.
@@ -25,7 +25,7 @@ class TestPAMAP2CoTLoader(unittest.TestCase):
         set_global_verbose(True)
         self.logger = get_logger()
         
-        from opentslm.time_series_datasets.pamap2.pamap2_cot_loader import load_pamap2_cot_splits
+        from industslm.time_series_datasets.pamap2.pamap2_cot_loader import load_pamap2_cot_splits
         self.load_pamap2_cot_splits = load_pamap2_cot_splits
         
         self.logger.loading("Loading PAMAP2 CoT dataset splits...")
@@ -88,7 +88,7 @@ class TestPAMAP2CoTQADataset(unittest.TestCase):
         set_global_verbose(True)
         self.logger = get_logger()
         
-        from opentslm.time_series_datasets.pamap2.PAMAP2CoTQADataset import PAMAP2CoTQADataset
+        from industslm.time_series_datasets.pamap2.PAMAP2CoTQADataset import PAMAP2CoTQADataset
         self.PAMAP2CoTQADataset = PAMAP2CoTQADataset
         
         self.logger.loading("Initializing PAMAP2CoTQADataset...")
@@ -194,8 +194,8 @@ class TestBalancedBatchSampler(unittest.TestCase):
         Test that BalancedBatchSampler produces balanced batches on the real PAMAP2CoTQADataset training split.
         Prints batch labels and class counts for each batch.
         """
-        from opentslm.time_series_datasets.pamap2.PAMAP2CoTQADataset import PAMAP2CoTQADataset
-        from opentslm.time_series_datasets.pamap2.BalancedBatchSampler import BalancedBatchSampler
+        from industslm.time_series_datasets.pamap2.PAMAP2CoTQADataset import PAMAP2CoTQADataset
+        from industslm.time_series_datasets.pamap2.BalancedBatchSampler import BalancedBatchSampler
         # Helper to extract label from answer string
         def extract_label_from_answer(answer: str) -> str:
             # Assumes answer ends with 'Answer: <label>' or 'Answer: <label>.'

@@ -16,7 +16,7 @@ from collections import Counter
 from tqdm import tqdm
 
 # Import the dataset class to get labels
-from opentslm.time_series_datasets.har_cot.HARCoTQADataset import HARCoTQADataset
+from industslm.time_series_datasets.har_cot.HARCoTQADataset import HARCoTQADataset
 
 # Get the supported labels from the dataset class
 SUPPORTED_LABELS = HARCoTQADataset.get_labels()

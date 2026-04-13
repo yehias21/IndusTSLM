@@ -12,11 +12,11 @@ Test script for the HAR CoT loader and dataset.
 import unittest
 
 # Import and set up global logger with verbose mode
-from opentslm.logger import get_logger, set_global_verbose
+from industslm.logger import get_logger, set_global_verbose
 
 def pretty_print_label_distribution(dataset, name):
     """Pretty print label distribution for a dataset."""
-    from opentslm.time_series_datasets.har_cot.har_cot_loader import get_label_distribution
+    from industslm.time_series_datasets.har_cot.har_cot_loader import get_label_distribution
     label_dist = get_label_distribution(dataset)
     total = len(dataset)
     print(f"\n{name} dataset:")
@@ -34,7 +34,7 @@ class TestHARCoTLoader(unittest.TestCase):
         set_global_verbose(True)
         self.logger = get_logger()
         
-        from opentslm.time_series_datasets.har_cot.har_cot_loader import load_har_cot_splits
+        from industslm.time_series_datasets.har_cot.har_cot_loader import load_har_cot_splits
         self.load_har_cot_splits = load_har_cot_splits
         
         self.logger.loading("Loading HAR CoT dataset splits...")
@@ -56,7 +56,7 @@ class TestHARCoTLoader(unittest.TestCase):
         pretty_print_label_distribution(self.val, "Validation")
         pretty_print_label_distribution(self.test, "Test")
         
-        from opentslm.time_series_datasets.har_cot.har_cot_loader import get_label_distribution
+        from industslm.time_series_datasets.har_cot.har_cot_loader import get_label_distribution
         train_dist = get_label_distribution(self.train)
         val_dist = get_label_distribution(self.val)
         test_dist = get_label_distribution(self.test)
@@ -146,7 +146,7 @@ class TestHARCoTQADataset(unittest.TestCase):
         set_global_verbose(True)
         self.logger = get_logger()
         
-        from opentslm.time_series_datasets.har_cot.HARCoTQADataset import HARCoTQADataset
+        from industslm.time_series_datasets.har_cot.HARCoTQADataset import HARCoTQADataset
         self.HARCoTQADataset = HARCoTQADataset
         
         self.logger.loading("Initializing HARCoTQADataset...")

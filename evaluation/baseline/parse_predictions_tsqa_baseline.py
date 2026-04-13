@@ -43,7 +43,7 @@ import re
 from pathlib import Path
 from typing import Dict, List
 
-from evaluation.opentslm.parse_predictions import (
+from evaluation.industslm.parse_predictions import (
     calculate_f1_score,
     calculate_f1_stats,
     calculate_accuracy_stats,

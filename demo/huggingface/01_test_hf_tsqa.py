@@ -12,11 +12,11 @@ This script:
 4. Prints model outputs
 """
 
-from opentslm.model.llm.OpenTSLM import OpenTSLM
-from opentslm.time_series_datasets.TSQADataset import TSQADataset
-from opentslm.time_series_datasets.util import extend_time_series_to_match_patch_size_and_aggregate
+from industslm.model.llm.OpenTSLM import OpenTSLM
+from industslm.time_series_datasets.TSQADataset import TSQADataset
+from industslm.time_series_datasets.util import extend_time_series_to_match_patch_size_and_aggregate
 from torch.utils.data import DataLoader
-from opentslm.model_config import PATCH_SIZE
+from industslm.model_config import PATCH_SIZE
 import torch
 # Model repository ID - change this to test different models
 REPO_ID = "OpenTSLM/llama-3.2-1b-tsqa-sp"

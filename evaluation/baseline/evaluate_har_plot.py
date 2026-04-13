@@ -13,8 +13,8 @@ from typing import Dict, Any
 import matplotlib.pyplot as plt
 
 from common_evaluator_plot import CommonEvaluatorPlot
-from opentslm.time_series_datasets.pamap2.PAMAP2AccQADataset import PAMAP2AccQADataset
-from opentslm.time_series_datasets.har_cot.HARAccQADataset import HARAccQADataset
+from industslm.time_series_datasets.pamap2.PAMAP2AccQADataset import PAMAP2AccQADataset
+from industslm.time_series_datasets.har_cot.HARAccQADataset import HARAccQADataset
 
 def extract_label_from_prediction(prediction: str) -> str:
     """

@@ -20,7 +20,7 @@ from transformers.pipelines import pipeline
 import matplotlib.pyplot as plt
 from time import sleep
 
-from opentslm.logger import get_logger
+from industslm.logger import get_logger
 
 from .openai_pipeline import OpenAIPipeline
 

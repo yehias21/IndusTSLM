@@ -10,7 +10,7 @@ Test script for the SleepEDF CoT loader.
 """
 
 import unittest
-from opentslm.time_series_datasets.sleep.sleepedf_cot_loader import load_sleepedf_cot_splits, get_label_distribution
+from industslm.time_series_datasets.sleep.sleepedf_cot_loader import load_sleepedf_cot_splits, get_label_distribution
 
 def pretty_print_label_distribution(dataset, name):
     label_dist = get_label_distribution(dataset)

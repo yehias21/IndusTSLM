@@ -10,7 +10,7 @@ Test script to verify MedGemma support in OpenTSLMFlamingo.
 """
 
 import torch
-from opentslm.model.llm.OpenTSLMFlamingo import OpenTSLMFlamingo
+from industslm.model.llm.OpenTSLMFlamingo import OpenTSLMFlamingo
 
 
 def test_medgemma_support():

@@ -14,7 +14,7 @@ from typing import Dict, Any, List, Optional
 import matplotlib.pyplot as plt
 
 from common_evaluator_plot import CommonEvaluatorPlot
-from opentslm.time_series_datasets.ecg_qa.ECGQACoTQADataset import ECGQACoTQADataset
+from industslm.time_series_datasets.ecg_qa.ECGQACoTQADataset import ECGQACoTQADataset
 
 
 def extract_answer(text: str) -> str:

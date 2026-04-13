@@ -10,7 +10,7 @@ Test script for the M4QADataset with caption generation.
 """
 
 import unittest
-from opentslm.time_series_datasets.m4.M4QADataset import M4QADataset as _M4QADataset
+from industslm.time_series_datasets.m4.M4QADataset import M4QADataset as _M4QADataset
 
 class TestM4QADataset(unittest.TestCase):
     """

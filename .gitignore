@@ -1,22 +1,76 @@
-# SPDX-FileCopyrightText: 2025 Stanford University, ETH Zurich, and the project authors (see CONTRIBUTORS.md)
+# SPDX-FileCopyrightText: 2025 Stanford University, ETH Zurich, and the project authors
 # SPDX-FileCopyrightText: 2025 This source file is part of the OpenTSLM open-source project.
-#
 # SPDX-License-Identifier: MIT
 
-.venv
-.vscode
-__pycache__
-.DS_STORE
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+*.egg
+.eggs/
+build/
+dist/
+pip-wheel-metadata/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
 
-raw_data
-**/notebooks/*.png
+# --- Environments ---
+.venv/
+venv/
+env/
+
+# --- Editors / OS ---
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# --- Jupyter ---
+.ipynb_checkpoints/
+
+# --- ML / experiment artifacts ---
+results/
+**/results/*
+runs/
+checkpoints/
+wandb/
+mlruns/
+lightning_logs/
+outputs/
+logs/
+*.ckpt
+*.pt
+*.pth
+*.bin
+*.safetensors
+*.onnx
+
+# --- Data ---
+raw_data/
 **/data/*
 !**/data/.gitkeep
-**/results/*
 *.ts
+*.parquet
+*.arrow
+*.h5
+*.hdf5
+
+# --- Media / plots inside notebooks ---
+**/notebooks/*.png
+
+# --- Misc ---
 *.zip
-upload_to_huggingface.py
-
-dist/
-
+*.tar
+*.tar.gz
 *.license
+upload_to_huggingface.py
+.env
+.env.local

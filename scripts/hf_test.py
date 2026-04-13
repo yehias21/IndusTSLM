@@ -2,8 +2,8 @@
 # SPDX-FileCopyrightText: 2025 This source file is part of the OpenTSLM open-source project.
 #
 # SPDX-License-Identifier: MIT
-from opentslm import OpenTSLM
-from opentslm.prompt import TextPrompt, TextTimeSeriesPrompt, FullPrompt
+from industslm import OpenTSLM
+from industslm.prompt import TextPrompt, TextTimeSeriesPrompt, FullPrompt
 
 # Load model
 model = OpenTSLM.load_pretrained("OpenTSLM/gemma-3-270m-pt-har-flamingo")

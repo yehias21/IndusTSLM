@@ -6,9 +6,9 @@
 import json
 import os
 from typing import List
-from opentslm.time_series_datasets.TSQADataset import TSQADataset
-from opentslm.time_series_datasets.monash.MonashSPO2QADataset import MonashSPO2QADataset
-from opentslm.time_series_datasets.util import (
+from industslm.time_series_datasets.TSQADataset import TSQADataset
+from industslm.time_series_datasets.monash.MonashSPO2QADataset import MonashSPO2QADataset
+from industslm.time_series_datasets.util import (
     extend_time_series_to_match_patch_size_and_aggregate,
 )
 import torch
@@ -18,10 +18,10 @@ from torch.utils.data import ConcatDataset, DataLoader, Dataset
 from tqdm.auto import tqdm
 from transformers import get_linear_schedule_with_warmup
 
-from opentslm.model.encoder.TransformerCNNEncoder import TransformerCNNEncoder
-from opentslm.model.llm.OpenTSLMSP import OpenTSLMSP
-from opentslm.model.projector.MLPProjector import MLPProjector
-from opentslm.model_config import (
+from industslm.model.encoder.TransformerCNNEncoder import TransformerCNNEncoder
+from industslm.model.llm.OpenTSLMSP import OpenTSLMSP
+from industslm.model.projector.MLPProjector import MLPProjector
+from industslm.model_config import (
     BATCH_SIZE,
     EARLY_STOP_PAT,
     GRAD_CLIP_NORM,

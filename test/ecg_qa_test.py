@@ -24,7 +24,7 @@ def test_ecgqa_loader():
     print("Testing ECG-QA loader...")
     
     try:
-        from opentslm.time_series_datasets.ecg_qa.ecgqa_loader import (
+        from industslm.time_series_datasets.ecg_qa.ecgqa_loader import (
             does_ecg_qa_exist, 
             does_ptbxl_exist,
             download_ecg_qa_if_not_exists,
@@ -53,7 +53,7 @@ def test_ecgqa_dataset():
     print("\nTesting ECGQADataset...")
     
     try:
-        from opentslm.time_series_datasets.ecg_qa.ECGQADataset import ECGQADataset
+        from industslm.time_series_datasets.ecg_qa.ECGQADataset import ECGQADataset
         
         # Try to create dataset instances with limited samples for faster testing
         print("Creating dataset instances (limited to 5 samples each for testing)...")

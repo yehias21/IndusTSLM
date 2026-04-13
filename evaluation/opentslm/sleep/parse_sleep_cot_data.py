@@ -16,7 +16,7 @@ from collections import Counter
 from tqdm import tqdm
 
 # Import dataset via package namespace
-from opentslm.time_series_datasets.sleep.SleepEDFCoTQADataset import SleepEDFCoTQADataset
+from industslm.time_series_datasets.sleep.SleepEDFCoTQADataset import SleepEDFCoTQADataset
 
 # We'll determine supported labels dynamically from the actual ground truth data
 # Start with the dataset class labels as a fallback

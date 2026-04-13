@@ -7,10 +7,10 @@ import torch
 import numpy as np
 import pandas as pd
 
-from opentslm.model.llm.OpenTSLMFlamingo import OpenTSLMFlamingo
-from opentslm.prompt.text_prompt import TextPrompt
-from opentslm.prompt.text_time_series_prompt import TextTimeSeriesPrompt
-from opentslm.prompt.full_prompt import FullPrompt
+from industslm.model.llm.OpenTSLMFlamingo import OpenTSLMFlamingo
+from industslm.prompt.text_prompt import TextPrompt
+from industslm.prompt.text_time_series_prompt import TextTimeSeriesPrompt
+from industslm.prompt.full_prompt import FullPrompt
 
 # 1. Load the model
 device = (

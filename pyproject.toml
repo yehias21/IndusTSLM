@@ -4,40 +4,22 @@
 # SPDX-License-Identifier: MIT
 
 [project]
-name = "opentslm"
+name = "industslm"
 version = "0.1.0"
-description = "OpenTSLM: Open Time Series Language Model - Curriculum Learning for Multimodal Time Series Understanding with Large Language Models"
+description = "IndusTSLM: Exploring Time-Series Language Models for Drilling Data. Builds on the OpenTSLM open-source project (https://github.com/StanfordBDHG/OpenTSLM)."
 readme = "README.md"
 requires-python = ">=3.12"
 license = "MIT"
 authors = [
-    {name = "Patrick Langer"},
-    {name = "Thomas Kaar"},
-    {name = "Max Rosenblattl"},
-    {name = "Maxwell A. Xu"},
-    {name = "Winnie Chow"},
-    {name = "Martin Maritsch"},
-    {name = "Robert Jakob"},
-    {name = "Aradhana Verma"},
-    {name = "Brian Han"},
-    {name = "Daniel Seung Kim"},
-    {name = "Henry Chubb"},
-    {name = "Scott Ceresnak"},
-    {name = "Aydin Zahedivash"},
-    {name = "Alexander Tarlochan Singh Sandhu"},
-    {name = "Fatima Rodriguez"},
-    {name = "Daniel McDuff"},
-    {name = "Elgar Fleisch"},
-    {name = "Oliver Aalami"},
-    {name = "Filipe Barata"},
-    {name = "Paul Schmiedmayer"}
+    {name = "Yahia Salaheldin Shaaban"}
 ]
 keywords = [
     "time-series",
     "large-language-models",
     "curriculum-learning",
     "multimodal",
-    "healthcare"
+    "drilling",
+    "industrial"
 ]
 
 dependencies = [
